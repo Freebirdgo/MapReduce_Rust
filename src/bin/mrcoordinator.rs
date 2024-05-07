@@ -10,9 +10,6 @@ use tokio::time::sleep;
 async fn main() -> anyhow::Result<()> {
     let args = env::args().collect::<Vec<String>>();
     if args.len() != 4 {
-        // Note here the `input file number` is number of files to read for each map task
-        // Which is the `map_n` in `Coordinator`
-        // The input file will start from `gut-0.txt` to `gut-{0 + map_n - 1}.txt`
         println!("Usage: cargo run --bin mrcoordinator -- <input files number> <reduce task number> <worker number>");
         return Ok(());
     }
@@ -26,14 +23,11 @@ async fn main() -> anyhow::Result<()> {
         worker_n
     );
 
-    // Create a new Coordinator
     let coordinator = Arc::new(Mutex::new(Coordinator::new(map_n, reduce_n, worker_n)));
 
 
-    // Create a clone for RPC server
     let coordinator_clone = Arc::clone(&coordinator);
 
-    // Prepare for the RPC server configuration
     let server_address = "127.0.0.1:1040".parse::<SocketAddr>().unwrap();
     let server_transport = tarpc::serde_transport::tcp::listen(
         server_address, 
@@ -50,19 +44,14 @@ async fn main() -> anyhow::Result<()> {
 
     println!("[Preparation] The Coordinator RPC server has launched and is currently serving, please launch #{} worker process(es) to begin MapReduce", worker_n);
 
-    // Used to check the lease every 5 seconds, to detect the sudden crash from workers
     let lease_period = 5;
     let mut lease_time_counter = 0;
     while !coordinator.lock().unwrap().done() {
-        // If not finished, sleep for a while in the main thread
         sleep(Duration::from_secs(1)).await;
         lease_time_counter += 1;
         if lease_time_counter == lease_period {
-            // Check the map or reduce lease every `lease_period` seconds
-            // Since the MapReduce will only be in either map or reduce phase without overlapping
             println!("[Check Lease] Check the current lease to see if any worker is offline");
             assert!(coordinator.lock().unwrap().check_lease());
-            // Reset the time counter
             lease_time_counter = 0;
         }
     }

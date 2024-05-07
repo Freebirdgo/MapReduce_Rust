@@ -41,7 +41,6 @@ impl Worker {
     }
 
     /// Change the current state from `map` to `reduce`
-    /// Can only be used in map phase
     pub fn change_state(&mut self) {
         assert!(!self.state);
         self.state = true;
@@ -128,9 +127,7 @@ impl Worker {
         for kv in key_value_pairs {
             let (key, value) = (kv.key, kv.value);
             let index = ((Self::cal_hash_for_key(&key)) % self.reduce_n as u64) as i32;
-            // Sanity check
             assert!(index >= 0 && index < self.reduce_n);
-            // Append the current key-value pair to the intermediate file asynchronously
             file_vec[index as usize].write_all(format!("{} {}\n", key, value).as_bytes()).await?;
             println!(
                 "[Map] Worker finish mapping task #{}, the intermediate result has been written to {}",
@@ -143,36 +140,28 @@ impl Worker {
     }
 
     pub async fn map(&mut self) -> anyhow::Result<bool> {
-        // The current state of worker must be in map phase
         assert!(!self.get_state());
         // The task id must not be -1
         assert!(self.map_task_id != -1);
-        // Let's read the file into memory
         let contents = self.read_file_to_mem_map();
-        // Then get the key-value pairs that we'd like to map to intermediate files
         let key_value_pairs = call_map_func(
             Box::new(wc::map),
             &contents
         );
         // Write the key-value pairs to the intermediate files according to the index (hash(key) % reduce_n)
         assert!(self.write_key_value_to_file(key_value_pairs).await?);
-        // Finish the current map task, set the task id back to -1
         self.set_map_id(-1);
         Ok(true)
     }
 
     pub async fn reduce(&mut self) -> anyhow::Result<bool> {
-        // The current state of worker must be in reduce phase
         assert!(self.get_state());
         // The task id must not be -1
         assert!((self.map_task_id == -1) && (self.reduce_task_id != -1));
-        // Let's read the intermediate files into memory
         let mut key_value_contents = self.read_file_to_mem_reduce();
-        // Sort the key-value pairs based on key
         key_value_contents.sort_by(|lhs, rhs| {
             lhs.key.cmp(&rhs.key)
         });
-        // Traverse the key-value pairs for the actual reduce phase
         let mut kv_vec = Vec::new();
         let mut prev = String::new();
         let file_name = "mr-".to_string() + &self.reduce_task_id.to_string() + ".txt";
@@ -182,17 +171,13 @@ impl Worker {
                 prev = kv.key.clone();
             }
             if kv.key != prev {
-                // Let's reduce!
                 let reduce_result = call_reduce_func(
                     Box::new(wc::reduce),
                     &prev,
                     kv_vec.clone()
                 );
-                // The end of the collection for one key, need to write the result to output file
                 file.write_all(format!("{} {}\n", prev, reduce_result).as_bytes()).await?;
-                // Clear the kv vector
                 kv_vec.clear();
-                // Update prev
                 prev = kv.key.clone();
             }
             kv_vec.push(&kv.value);
